@@ -1,0 +1,320 @@
+import SwiftUI
+import Combine
+import AVFoundation
+import UniformTypeIdentifiers
+
+class PlayerViewModel: NSObject, ObservableObject {
+    @Published var isPlaying: Bool = false
+    @Published var currentTrackName: String = "No Tracks"
+    @Published var currentTime: TimeInterval = 0
+    @Published var duration: TimeInterval = 1
+    
+    @Published var playlist: [URL] = []
+    @Published var currentIndex: Int = 0
+    
+    var audioPlayer: AVAudioPlayer?
+    var timer: Timer?
+    
+    private var playerDelegate = PlayerDelegate()
+    
+    override init() {
+        super.init()
+
+        playerDelegate.onFinish = { [weak self] in
+            self?.nextTrack()
+        }
+    }
+    
+    func loadPlaylist(urls: [URL]) {
+        self.playlist = urls
+        self.currentIndex = 0
+        if !playlist.isEmpty {
+            playTrack(at: 0)
+        }
+    }
+    
+    func playTrack(at index: Int) {
+        guard index >= 0 && index < playlist.count else { return }
+        
+        stop()
+        
+        currentIndex = index
+        let url = playlist[index]
+        
+        let _ = url.startAccessingSecurityScopedResource()
+        
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+            
+            audioPlayer = try AVAudioPlayer(contentsOf: url)
+            audioPlayer?.delegate = playerDelegate
+            audioPlayer?.prepareToPlay()
+            
+            duration = audioPlayer?.duration ?? 0
+            currentTrackName = url.lastPathComponent.replacingOccurrences(of: ".mp3", with: "")
+            
+            play()
+        } catch {
+            print("Error: \(error.localizedDescription)")
+        }
+    }
+    
+    func play() {
+        audioPlayer?.play()
+        isPlaying = true
+        startTimer()
+    }
+    
+    func pause() {
+        audioPlayer?.pause()
+        isPlaying = false
+        stopTimer()
+    }
+    
+    func stop() {
+        audioPlayer?.stop()
+        isPlaying = false
+        stopTimer()
+        currentTime = 0
+    }
+    
+    func nextTrack() {
+        if playlist.isEmpty { return }
+        
+        if currentIndex < playlist.count - 1 {
+            playTrack(at: currentIndex + 1)
+        } else {
+            playTrack(at: 0)
+        }
+    }
+    
+    func prevTrack() {
+        if playlist.isEmpty { return }
+        
+        if currentTime > 3 {
+            seek(to: 0)
+        } else if currentIndex > 0 {
+            playTrack(at: currentIndex - 1)
+        } else {
+            playTrack(at: playlist.count - 1)
+        }
+    }
+    
+    func seek(to time: TimeInterval) {
+        audioPlayer?.currentTime = time
+        currentTime = time
+    }
+    
+    private func startTimer() {
+        stopTimer()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self = self, let player = self.audioPlayer else { return }
+            self.currentTime = player.currentTime
+        }
+    }
+    
+    func stopTimer() { timer?.invalidate() }
+}
+
+class PlayerDelegate: NSObject, AVAudioPlayerDelegate {
+    var onFinish: (() -> Void)?
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        onFinish?()
+    }
+}
+
+struct ContentView: View {
+    @StateObject var viewModel = PlayerViewModel()
+    @State private var showFilePicker = false
+    @State private var showPlaylist = false // Показать/скрыть список
+    
+    var body: some View {
+        ZStack {
+            // 1. ФОН
+            Image("cat")
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .edgesIgnoringSafeArea(.all)
+                .overlay(
+                    LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .center, endPoint: .bottom)
+                        .edgesIgnoringSafeArea(.all)
+                )
+            
+            VStack {
+                HStack {
+                    Image(systemName: "waveform")
+                    Text("CYBER PLAYER")
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    Spacer()
+                    
+                    Button(action: { showFilePicker = true }) {
+                        HStack {
+                            Image(systemName: "plus")
+                            Text("ADD")
+                                .font(.caption.bold())
+                        }
+                        .padding(.vertical, 8)
+                        .padding(.horizontal, 12)
+                        .background(.ultraThinMaterial)
+                        .clipShape(Capsule())
+                    }
+                }
+                .padding(.top, 50)
+                .padding(.horizontal, 20)
+                .foregroundColor(.white)
+                
+                Spacer()
+                
+                                if showPlaylist {
+                                    ScrollView {
+                                        VStack(spacing: 10) {
+                                            ForEach(Array(viewModel.playlist.enumerated()), id: \.element) { index, url in
+                                                Button(action: {
+                                                    viewModel.playTrack(at: index)
+                                                }) {
+                                                    HStack {
+                                                        // ИСПРАВЛЕНИЕ ЗДЕСЬ:
+                                                        Text("\(index + 1).")
+                                                            .font(.system(.body, design: .monospaced))
+                                                            .foregroundColor(.gray)
+                                                        
+                                                        Text(url.lastPathComponent.replacingOccurrences(of: ".mp3", with: ""))
+                                                            .font(.system(size: 16, weight: .medium))
+                                                            .lineLimit(1)
+                                                        
+                                                        Spacer()
+                                                        
+                                                        if index == viewModel.currentIndex {
+                                                            Image(systemName: "waveform.path.ecg")
+                                                                .foregroundColor(.cyan)
+                                                        }
+                                                    }
+                                                    .padding()
+                                                    .background(
+                                                        RoundedRectangle(cornerRadius: 15)
+                                                            .fill(index == viewModel.currentIndex ? Color.white.opacity(0.15) : Color.black.opacity(0.2))
+                                                    )
+                                                    .overlay(
+                                                        RoundedRectangle(cornerRadius: 15)
+                                                            .stroke(index == viewModel.currentIndex ? Color.cyan : Color.clear, lineWidth: 1)
+                                                    )
+                                                }
+                                                .foregroundColor(.white)
+                                            }
+                                        }
+                                        .padding()
+                                    }
+                                    .frame(maxHeight: 350)
+                                    .background(.ultraThinMaterial)
+                                    .cornerRadius(20)
+                                    .padding(.horizontal)
+                                }
+                
+                Spacer()
+                
+                VStack(alignment: .leading, spacing: 15) {
+                    
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(viewModel.currentTrackName)
+                                .font(.system(size: 20, weight: .bold))
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            
+                            Text(viewModel.isPlaying ? "Now Playing" : "Paused")
+                                .font(.caption.monospaced())
+                                .foregroundColor(.cyan)
+                        }
+                        Spacer()
+                        
+                        Button(action: { withAnimation { showPlaylist.toggle() } }) {
+                            Image(systemName: "list.bullet")
+                                .font(.title2)
+                                .foregroundColor(showPlaylist ? .cyan : .white)
+                                .padding(10)
+                                .background(Color.white.opacity(0.1))
+                                .clipShape(Circle())
+                        }
+                    }
+                    .padding(.horizontal, 5)
+                    
+                    HStack {
+                        Text(formatTime(viewModel.currentTime))
+                            .font(.caption2.monospaced())
+                            .foregroundColor(.white.opacity(0.8))
+                        
+                        Slider(value: Binding(get: { viewModel.currentTime }, set: { viewModel.seek(to: $0) }), in: 0...viewModel.duration)
+                            .accentColor(.cyan)
+                        
+                        Text(formatTime(viewModel.duration))
+                            .font(.caption2.monospaced())
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                    
+                    HStack(spacing: 30) {
+                        Spacer()
+                        Button(action: { viewModel.prevTrack() }) {
+                            Image(systemName: "backward.fill").font(.title2).foregroundColor(.white)
+                        }
+                        
+                        Button(action: {
+                            if viewModel.isPlaying { viewModel.pause() } else { viewModel.play() }
+                        }) {
+                            ZStack {
+                                Circle().fill(.white).frame(width: 65, height: 65)
+                                    .shadow(color: .cyan, radius: viewModel.isPlaying ? 15 : 0)
+                                Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
+                                    .font(.title).foregroundColor(.black)
+                            }
+                        }
+                        
+                        Button(action: { viewModel.nextTrack() }) {
+                            Image(systemName: "forward.fill").font(.title2).foregroundColor(.white)
+                        }
+                        Spacer()
+                    }
+                }
+                .padding(25)
+                .background(.ultraThinMaterial)
+                .cornerRadius(30, corners: [.topLeft, .topRight])
+                .edgesIgnoringSafeArea(.bottom)
+            }
+        }
+        .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [UTType.audio], allowsMultipleSelection: true) { result in
+            if let urls = try? result.get() {
+                viewModel.loadPlaylist(urls: urls)
+            }
+        }
+    }
+    
+    func formatTime(_ time: TimeInterval) -> String {
+        let m = Int(time) / 60
+        let s = Int(time) % 60
+        return String(format: "%02d:%02d", m, s)
+    }
+}
+
+extension View {
+    func cornerRadius(_ radius: CGFloat, corners: UIRectCorner) -> some View {
+        clipShape(RoundedCorner(radius: radius, corners: corners))
+    }
+}
+
+struct RoundedCorner: Shape {
+    var radius: CGFloat = .infinity
+    var corners: UIRectCorner = .allCorners
+    func path(in rect: CGRect) -> Path {
+        let path = UIBezierPath(roundedRect: rect, byRoundingCorners: corners, cornerRadii: CGSize(width: radius, height: radius))
+        return Path(path.cgPath)
+    }
+}
+
+@main
+struct RetroPlayerApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
